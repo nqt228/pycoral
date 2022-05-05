@@ -51,7 +51,7 @@ import collections
 import numpy as np
 from PIL import Image
 from PIL import ImageDraw
-
+import time
 from pycoral.adapters import common
 from pycoral.adapters import detect
 from pycoral.utils.dataset import read_label_file
@@ -200,7 +200,9 @@ def main():
   args = parser.parse_args()
 
   interpreter = make_interpreter(args.model)
+  
   interpreter.allocate_tensors()
+  print(interpreter)
   labels = read_label_file(args.label) if args.label else {}
 
   # Open image.
@@ -212,16 +214,32 @@ def main():
   tile_sizes = [
       map(int, tile_size.split('x')) for tile_size in args.tile_sizes.split(',')
   ]
+  start = time.time()
+  count = 0
+  def expand2square(pil_img, background_color):
+    width, height = pil_img.size
+    if width == height:
+        return pil_img
+    elif width > height:
+        result = Image.new(pil_img.mode, (width, width), background_color)
+        result.paste(pil_img, (0, (width - height) // 2))
+        return result
+    else:
+        result = Image.new(pil_img.mode, (height, height), background_color)
+        result.paste(pil_img, ((height - width) // 2, 0))
+        return result
   for tile_size in tile_sizes:
     for tile_location in tiles_location_gen(img_size, tile_size,
                                             args.tile_overlap):
       tile = img.crop(tile_location)
+      tile_demo = expand2square(tile, (0,0,0))
+      tile_demo.save("crop_demo_{}.jpg".format(count))
+      count += 1
       _, scale = common.set_resized_input(
           interpreter, tile.size,
           lambda size, img=tile: img.resize(size, Image.NEAREST))
       interpreter.invoke()
       objs = detect.get_objects(interpreter, args.score_threshold, scale)
-
       for obj in objs:
         bbox = [obj.bbox.xmin, obj.bbox.ymin, obj.bbox.xmax, obj.bbox.ymax]
         bbox = reposition_bounding_box(bbox, tile_location)
@@ -229,13 +247,13 @@ def main():
         label = labels.get(obj.id, '')
         objects_by_label.setdefault(label,
                                     []).append(Object(label, obj.score, bbox))
-
+  print('fps: ',1/(time.time()-start))
   for label, objects in objects_by_label.items():
     idxs = non_max_suppression(objects, args.iou_threshold)
     for idx in idxs:
       draw_object(draw, objects[idx])
-
-  img.show()
+  
+  # img.show()
   if args.output:
     img.save(args.output)
     print('Done. Results saved at', args.output)
